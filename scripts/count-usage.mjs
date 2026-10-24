@@ -61,7 +61,7 @@ function warn(diagnostics, tool, kind) {
   diagnostics[key] = (diagnostics[key] ?? 0) + 1;
 }
 
-async function* readRecords(filename, tool, diagnostics) {
+async function* readRecords(filename, tool, diagnostics, includeModels = false) {
   const stream = createReadStream(filename, { encoding: 'utf8' });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
@@ -69,7 +69,7 @@ async function* readRecords(filename, tool, diagnostics) {
       // 仅解析可能含用量或会话编号的行，不读取 content、text、工具参数等字段。
       const relevant = tool === 'Claude Code'
         ? /"type"\s*:\s*"assistant"/.test(line) && /"usage"\s*:/.test(line)
-        : /"type"\s*:\s*"(token_count|session_meta)"/.test(line);
+        : /"type"\s*:\s*"(token_count|session_meta|turn_context|task_started|turn_started)"/.test(line);
       if (!relevant) continue;
       try {
         yield JSON.parse(line);
@@ -84,6 +84,12 @@ async function* readRecords(filename, tool, diagnostics) {
     lines.close();
     stream.destroy();
   }
+}
+
+function modelIdentifier(value) {
+  // 只保留有限的模型标识字符；路径、空格、控制字符和非 ASCII 内容不外传。
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+    ? value : 'unknown';
 }
 
 function tokenNumber(value, optional = false) {
@@ -140,6 +146,7 @@ export async function collectUsage({
   home = os.homedir(), days = 7, now = new Date(),
   claudeRoot = path.join(home, '.claude', 'projects'),
   codexRoot = path.join(home, '.codex', 'sessions'),
+  includeModels = false,
 } = {}) {
   if (!Number.isSafeInteger(days) || days < 1 || !Number.isFinite(now.getTime())) {
     throw new Error('日期或天数无效。');
@@ -149,11 +156,12 @@ export async function collectUsage({
   if (!Number.isFinite(new Date(start).getTime())) throw new Error('天数超出日期范围。');
   const diagnostics = {};
   const rows = new Map();
+  const modelRows = new Map();
   for (let i = 0; i < days; i++) {
     const date = beijingDate(new Date(start + i * DAY_MS));
     for (const tool of TOOLS) rows.set(`${date}|${tool}`, { date, tool, ...emptyUsage() });
   }
-  function add(timestamp, tool, usage) {
+  function add(timestamp, tool, usage, model = 'unknown') {
     if (timestamp < start || timestamp > now.getTime()) return;
     const row = rows.get(`${beijingDate(new Date(timestamp))}|${tool}`);
     if (!row) return;
@@ -161,6 +169,12 @@ export async function collectUsage({
       if (!Number.isSafeInteger(usage[field]) || usage[field] < 0 ||
           !Number.isSafeInteger(row[field] + usage[field])) throw new Error('计数超出安全范围。');
       row[field] += usage[field];
+    }
+    if (includeModels) {
+      const key = `${row.date}|${tool}|${model}`;
+      if (!modelRows.has(key)) modelRows.set(key, { date: row.date, tool, model, ...emptyUsage() });
+      const modelRow = modelRows.get(key);
+      for (const field of FIELDS) modelRow[field] += usage[field];
     }
   }
 
@@ -180,24 +194,58 @@ export async function collectUsage({
       try { usage = claudeUsage(record.message.usage); }
       catch { warn(diagnostics, TOOLS[0], '无效用量记录'); continue; }
       const old = messages.get(id);
-      // 全目录按 message.id 去重。流式版本取合计最大的完整计数，日期取首次记录。
+      // 全目录按 message.id 去重。模型跟随较大的完整计数，日期仍取首次记录。
+      const useOld = old && tokenTotal(old.usage) > tokenTotal(usage);
       messages.set(id, {
         timestamp: Math.min(timestamp, old?.timestamp ?? timestamp),
-        usage: old && tokenTotal(old.usage) > tokenTotal(usage) ? old.usage : usage,
+        usage: useOld ? old.usage : usage,
+        model: useOld ? old.model : modelIdentifier(record.message.model),
       });
     }
   }
-  for (const message of messages.values()) add(message.timestamp, TOOLS[0], message.usage);
+  for (const message of messages.values()) {
+    add(message.timestamp, TOOLS[0], message.usage, message.model);
+  }
 
   const sessions = new Map();
+  const sessionParents = new Map();
   const codexFiles = await listJsonl(codexRoot);
   if (codexFiles.length === 0) warn(diagnostics, TOOLS[1], '没有日志文件');
   for (const filename of codexFiles) {
     let sessionId = filename;
-    for await (const record of readRecords(filename, TOOLS[1], diagnostics)) {
+    let seenSessionMeta = false;
+    let currentModel = 'unknown';
+    let currentTurn = null;
+    let sessionCreated = NaN;
+    let hasParent = false;
+    const turnStarts = new Map();
+    for await (const record of readRecords(filename, TOOLS[1], diagnostics, includeModels)) {
       if (record.type === 'session_meta') {
-        const id = record.payload?.id ?? record.payload?.session_id;
-        if (typeof id === 'string' && id) sessionId = id;
+        // 首个meta属于此物理日志；后续meta可能只是父线程复制的历史，绝不能改写当前线程。
+        if (!seenSessionMeta) {
+          seenSessionMeta = true;
+          const id = record.payload?.id ?? record.payload?.session_id;
+          if (typeof id === 'string' && id) sessionId = id;
+          currentModel = modelIdentifier(record.payload?.model);
+          sessionCreated = Date.parse(record.payload?.timestamp);
+          const parents = [record.payload?.parent_thread_id, record.payload?.forked_from_id]
+            .filter(parent => typeof parent === 'string' && parent && parent !== sessionId);
+          hasParent = parents.length > 0;
+          if (!sessionParents.has(sessionId)) sessionParents.set(sessionId, new Set());
+          for (const parent of parents) sessionParents.get(sessionId).add(parent);
+        }
+        continue;
+      }
+      if (record.type === 'turn_context') {
+        currentModel = modelIdentifier(record.payload?.model);
+        currentTurn = typeof record.payload?.turn_id === 'string' ? record.payload.turn_id : null;
+        continue;
+      }
+      if (record.type === 'event_msg' && ['task_started', 'turn_started'].includes(record.payload?.type)) {
+        if (typeof record.payload.turn_id === 'string' && record.payload.turn_id) {
+          currentTurn = record.payload.turn_id;
+          turnStarts.set(currentTurn, Date.parse(record.payload.started_at));
+        }
         continue;
       }
       if (record.type !== 'event_msg' || record.payload?.type !== 'token_count') continue;
@@ -214,11 +262,66 @@ export async function collectUsage({
         last = info.last_token_usage ? codexUsage(info.last_token_usage) : null;
       } catch { warn(diagnostics, TOOLS[1], '无效用量记录'); continue; }
       if (!sessions.has(sessionId)) sessions.set(sessionId, []);
-      sessions.get(sessionId).push({ timestamp, total, last });
+      const turnStarted = turnStarts.get(currentTurn);
+      const possiblyInherited = hasParent && Number.isFinite(sessionCreated) &&
+        Number.isFinite(turnStarted) && turnStarted < sessionCreated;
+      sessions.get(sessionId).push({ timestamp, total, last, model: currentModel,
+        turn: currentTurn, possiblyInherited });
     }
   }
+  // fork若真的复制token历史，其turn_id仍指向祖先。只在明确的父子关系下识别原拥有者，
+  // 不按“数字相同”跨独立线程去重，也不把重写后的复制时间当消费发生时间。
+  // 同线程相同时间/累计/last的片段副本可补turn身份，不能让缺上下文的副本抢先计祖先。
+  const eventIdentity = event => `${event.timestamp}|${FIELDS.map(k => event.total[k]).join('|')}|${event.last ? FIELDS.map(k => event.last[k]).join('|') : 'none'}`;
   for (const events of sessions.values()) {
+    const knownTurns = new Map();
+    for (const event of events) if (event.turn) {
+      const key = eventIdentity(event);
+      if (!knownTurns.has(key)) knownTurns.set(key, new Set());
+      knownTurns.get(key).add(event.turn);
+    }
+    for (const event of events) if (!event.turn) {
+      const turns = knownTurns.get(eventIdentity(event));
+      if (turns?.size === 1) event.turn = [...turns][0];
+    }
+  }
+  const turnSessions = new Map();
+  for (const [id, events] of sessions) for (const event of events) if (event.turn) {
+    if (!turnSessions.has(event.turn)) turnSessions.set(event.turn, new Set());
+    turnSessions.get(event.turn).add(id);
+  }
+  function descendsFrom(id, ancestor, visited = new Set()) {
+    if (id === ancestor) return true;
+    if (visited.has(id)) return false;
+    visited.add(id);
+    return [...(sessionParents.get(id) ?? [])].some(parent => descendsFrom(parent, ancestor, visited));
+  }
+  const turnOwners = new Map();
+  for (const [turn, ids] of turnSessions) {
+    const owners = [...ids].filter(candidate => [...ids].every(id => descendsFrom(id, candidate)));
+    // 原父日志缺失时，复制历史也可能只出现于孩子。只用内嵌开始时间标可疑，
+    // 不能用会被重写的外层时间认定孩子是新消费来源。保留基线并显式诊断。
+    const sourceUncertain = owners.length === 1 && sessions.get(owners[0]).some(
+      event => event.turn === turn && event.possiblyInherited);
+    turnOwners.set(turn, owners.length === 1 && !sourceUncertain ? owners[0] : null);
+    if (owners.length !== 1) warn(diagnostics, TOOLS[1], '用量来源冲突');
+    else if (sourceUncertain) warn(diagnostics, TOOLS[1], '继承用量来源待核');
+  }
+  for (const [sessionId, events] of sessions) {
     events.sort((a, b) => a.timestamp - b.timestamp);
+    if (includeModels) {
+      // 相同事件的另一份副本可能保留了模型上下文，只补模型，不改变累计差分顺序。
+      const eventKey = eventIdentity;
+      const knownModels = new Map();
+      for (const event of events) {
+        if (event.model !== 'unknown' && !knownModels.has(eventKey(event))) {
+          knownModels.set(eventKey(event), event.model);
+        }
+      }
+      for (const event of events) {
+        if (event.model === 'unknown') event.model = knownModels.get(eventKey(event)) ?? 'unknown';
+      }
+    }
     let previous = null;
     for (const event of events) {
       if (previous && FIELDS.every(field => event.total[field] === previous[field])) continue;
@@ -234,7 +337,9 @@ export async function collectUsage({
       try {
         const normalized = normalizeCodex(usage);
         if (normalized.input_tokens < 0) throw new Error('无效差值');
-        add(event.timestamp, TOOLS[1], normalized);
+        // 继承快照仍用来建立孩子的累计基线，但它本身只能在原拥有者处计一次。
+        if (event.turn && turnOwners.get(event.turn) !== sessionId) continue;
+        add(event.timestamp, TOOLS[1], normalized, event.model);
       } catch { warn(diagnostics, TOOLS[1], '无效用量差值'); }
     }
   }
@@ -253,7 +358,17 @@ export async function collectUsage({
   if ([...daily, ...totals].some(row =>
     [...FIELDS, 'total_tokens', 'total_without_cache_read_tokens'].some(field =>
       !Number.isSafeInteger(row[field])))) throw new Error('合计超出安全整数范围。');
-  return { report: { daily, totals }, diagnostics };
+  const report = { daily, totals };
+  if (includeModels) {
+    report.by_model_daily = [...modelRows.values()]
+      .sort((a, b) => a.date.localeCompare(b.date) || TOOLS.indexOf(a.tool) - TOOLS.indexOf(b.tool)
+        || a.model.localeCompare(b.model))
+      .map(finishRow);
+    if (report.by_model_daily.some(row =>
+      [...FIELDS, 'total_tokens', 'total_without_cache_read_tokens'].some(field =>
+        !Number.isSafeInteger(row[field])))) throw new Error('模型合计超出安全整数范围。');
+  }
+  return { report, diagnostics };
 }
 
 export function formatTable(report) {

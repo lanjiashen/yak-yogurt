@@ -4,12 +4,18 @@ on:
   push:
     paths:
       - 'scripts/**'
+      - 'lib/**'
+      - 'web/**'
       - 'tests/**'
+      - 'package.json'
       - '.github/workflows/usage-tests.yml'
   pull_request:
     paths:
       - 'scripts/**'
+      - 'lib/**'
+      - 'web/**'
       - 'tests/**'
+      - 'package.json'
       - '.github/workflows/usage-tests.yml'
   workflow_dispatch:
 
@@ -27,10 +33,16 @@ jobs:
         include:
           - os: windows-2025
             label: Windows x64
+            platform: win32
+            arch: x64
           - os: macos-15
             label: macOS Apple Silicon
+            platform: darwin
+            arch: arm64
           - os: macos-15-intel
             label: macOS Intel
+            platform: darwin
+            arch: x64
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
@@ -41,7 +53,10 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Show test environment
-        run: node -e "console.log(process.platform, process.arch, process.version)"
-      - name: Run synthetic-log tests
+      - name: Show and verify test environment
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e "const a=require('node:assert/strict'); console.log(process.platform, process.arch, process.version); a.equal(process.platform,process.env.EXPECTED_PLATFORM); a.equal(process.arch,process.env.EXPECTED_ARCH)"
+      - name: Run synthetic-log and local-loop tests
         run: node --test
