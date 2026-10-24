@@ -1,24 +1,73 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#164f45">
-<meta name="description" content="有酸奶 Yak Yogurt · AI 编程用量周榜。看见投入，认识一起创作的同行。">
-<title>有酸奶 Yak Yogurt · AI 编程用量周榜</title>
-<link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="styles.css"><script src="app.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#164f45">
+<meta name="description" content="有酸奶 Yak Yogurt · AI 编程日用量榜。看见投入，认识一起创作的同行。">
+<title>有酸奶 Yak Yogurt · 日用量榜</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
 </head>
 <body data-mode="public">
-<header class="site-header"><a class="brand" href="./" aria-label="有酸奶 Yak Yogurt 首页"><img class="brand-mark" src="favicon.svg" alt=""><span class="brand-name">Yak Yogurt<span>有酸奶 · 一起创造</span></span></a><div class="header-right"><span class="local-badge"><i></i><span id="mode-label">仅在本机运行</span></span><span class="header-location">西藏 · 连接同行</span></div></header>
+<header class="site-header">
+  <a class="brand" href="./" aria-label="有酸奶 Yak Yogurt 首页"><img class="brand-mark" src="favicon.svg" alt=""><span class="brand-name">Yak Yogurt<span>有酸奶 · 一起创造</span></span></a>
+  <span id="mode-label" class="mode-label">本机汇总</span>
+</header>
+<nav class="bottom-nav" aria-label="主要页面"><div class="nav-tabs" role="tablist" aria-label="有酸奶页面">
+  <button id="tab-board" type="button" role="tab" aria-selected="true" aria-controls="panel-board" tabindex="0" data-tab="board"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11M12 19V5M19 19V8"/></svg><span>榜单</span></button>
+  <button id="tab-usage" type="button" role="tab" aria-selected="false" aria-controls="panel-usage" tabindex="-1" data-tab="usage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17 9 12 13 15 20 6M4 5v14h16"/></svg><span>用量</span></button>
+  <button id="tab-me" type="button" role="tab" aria-selected="false" aria-controls="panel-me" tabindex="-1" data-tab="me"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg><span>我的</span></button>
+  <button id="tab-about" type="button" role="tab" aria-selected="false" aria-controls="panel-about" tabindex="-1" data-tab="about"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.5"/></svg><span>关于</span></button>
+</div></nav>
 <main>
-<section class="intro" aria-labelledby="page-title"><div class="intro-copy"><p class="eyebrow">AI CODING / WEEKLY LOG</p><h1 id="page-title">每一份投入，<br>都在创造点什么。</h1><p class="intro-description">从一周的 AI 编程用量开始，认识一起做东西的人。<br>先记下自己的进展，再让作品被看见。</p><div class="intro-meta"><i></i><span>Claude Code + Codex</span><span>·</span><span>北京时间自然周</span></div></div><div class="intro-art" aria-hidden="true"><svg viewBox="0 0 400 240"><circle cx="301" cy="55" r="26" fill="#eab178"/><path d="m0 185 81-98 50 60 60-100 95 138 59-71 55 71v55H0z" fill="#dce3d0"/><path d="m136 137 55-90 62 90-30-13-31 17-25-17z" fill="#f9f7ee"/><path d="m0 204 78-29 77 27 96-39 149 42v35H0z" fill="#bbcebb"/><path d="M60 214c54-8 78 12 134 2s95-22 150-8" stroke="#faf7ee" stroke-width="2" fill="none"/><g transform="translate(180 137)"><path d="M-16 20c-19 4-28-1-26-15 4 9 12 9 20 4M29 20C48 24 57 19 55 5 51 14 43 14 35 9" fill="none" stroke="#164f45" stroke-width="6" stroke-linecap="round"/><path d="M-24 18C-27-8 38-9 39 18l-2 33-14 14h-27l-17-15z" fill="#164f45"/><path d="m-20 11 9-15 9 8 10-12 8 12 10-8 10 16" fill="#164f45"/><path d="M-11 31h4m27 0h4" stroke="#faf7ee" stroke-width="4" stroke-linecap="round"/><path d="M-4 47q12 7 23 0" stroke="#faf7ee" stroke-width="3" fill="none" stroke-linecap="round"/></g></svg><span>MAKE SOMETHING. MEET SOMEONE.</span></div></section>
-<div id="error-banner" class="error-banner" role="alert" hidden><div><strong>暂时没能读取周榜</strong><p id="error-message"></p></div><button type="button" id="retry-button" class="text-button">重新读取</button></div>
-<div class="section-toolbar"><div class="section-heading"><span class="section-kicker">01 / YOUR WEEK</span><h2 id="board-title">本机周榜</h2></div><div class="week-controls" aria-label="选择周次"><button id="previous-week" class="icon-button" type="button" aria-label="查看前一周">←</button><span id="week-range">读取中…</span><button id="current-week" type="button">回到本周</button></div></div>
-<section id="overview" class="overview" aria-label="本周用量概览" aria-busy="true"><div class="primary-stat"><div class="stat-topline"><span id="total-caption">本周 token 用量</span><span id="week-status">正在读取</span></div><div class="total-number"><span id="total-tokens">—</span><span id="total-unit">tokens</span></div><p class="stat-footnote">含输入、输出、缓存写入和缓存读取</p><div class="overview-footer"><span>不含缓存读取</span><strong id="without-cache">—</strong></div></div><div class="secondary-stats"><div><p class="stat-label">API 参考估算 <abbr title="按公开 API 价目估算已上报汇总，不是订阅费用，也不是实际账单。">i</abbr></p><p id="cost-estimate">—</p><p id="cost-detail">正在读取价格覆盖范围</p></div><div class="participant-block"><div><p class="stat-label">上榜创作者</p><p class="participant-number"><strong id="participant-count">—</strong><span>位创作者</span></p></div><p class="small-note">只比用量，不比水平。</p></div></div></section>
-<p class="data-caption"><span id="update-status">正在读取本机汇总…</span><button id="refresh-button" type="button" class="text-button">刷新数据 ↻</button></p><div id="diagnostics-note" class="diagnostics-note" hidden><strong>部分日志未计入，请以预览提示为准。</strong><ul id="diagnostics-list"></ul><p>以上只显示固定分类和计数，不显示日志原文。当前数字只覆盖已成功解析的记录。</p></div>
-<section class="leaderboard-panel" aria-label="创作者周榜"><div class="table-head" aria-hidden="true"><span>排名</span><span>创作者 / 正在做的事</span><span>工具</span><span>周 token</span></div><div id="leaderboard-rows"></div><div id="empty-state" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">↗</span><h3 id="empty-title">这一周，等你留下第一笔。</h3><p id="empty-description">先预览本机统计，确认后主动上报。<br>上报成功后，你和正在做的作品会出现在这里。</p><a class="primary-button" href="#how-to-report">查看上报方法 ↓</a></div><p id="scope-note" class="board-note">统计来源：本机可读取的 Claude Code 与 Codex 日志。其他设备与缺失日志不在统计范围内。</p></section>
-<section class="details-section" aria-labelledby="details-title"><div class="section-toolbar"><div class="section-heading"><span class="section-kicker">02 / UNDER THE NUMBERS</span><h2 id="details-title">看看用量都去哪了</h2></div><div class="tool-filters" role="group" aria-label="筛选明细工具"><button class="filter-button active" type="button" data-tool="all" aria-pressed="true">全部</button><button class="filter-button" type="button" data-tool="Claude Code" aria-pressed="false">Claude Code</button><button class="filter-button" type="button" data-tool="Codex" aria-pressed="false">Codex</button></div></div><p id="filter-caption">下方明细包含两个工具；筛选不会改变上方周榜。</p>
-<div class="token-grid"><article class="token-card"><span class="token-label"><i class="input"></i>输入</span><strong id="detail-input">—</strong><span>未命中缓存的输入</span></article><article class="token-card"><span class="token-label"><i class="output"></i>输出</span><strong id="detail-output">—</strong><span>包括推理输出，不重复累加</span></article><article class="token-card"><span class="token-label"><i class="write"></i>缓存写入</span><strong id="detail-write">—</strong><span>本次建立的缓存</span></article><article class="token-card"><span class="token-label"><i class="read"></i>缓存读取</span><strong id="detail-read">—</strong><span>重复使用的已有输入</span></article></div>
-<div class="detail-panels"><article class="chart-panel"><div class="panel-heading"><h3>每天，往前一点</h3><span>每日 token</span></div><div id="daily-chart" aria-label="每日用量柱状图"></div><p id="chart-caption"></p></article><article class="models-panel"><div class="panel-heading"><h3>使用的模型</h3><span id="model-count">—</span></div><div id="model-list"></div><p class="model-note">模型名称来自日志。无法识别的部分保留为“未知模型”。</p></article></div></section>
-<section class="project-section" aria-labelledby="project-section-title"><div class="section-heading"><span class="section-kicker">03 / MADE WITH AI</span><h2 id="project-section-title">数字背后，是正在做的作品</h2></div><article class="project-card"><div class="project-symbol" aria-hidden="true">↗</div><div class="project-copy"><p id="project-owner">我的作品</p><h3 id="project-name">有酸奶 Yak Yogurt</h3><p id="project-description">认识在西藏使用 AI 创作与编程的同行</p></div><a id="project-link" target="_blank" rel="noopener noreferrer" hidden>看看作品 ↗</a></article></section>
-<section id="how-to-report" class="report-section" aria-labelledby="report-title"><div class="report-intro"><span class="section-kicker">LOCAL FIRST</span><h2 id="report-title">看清楚，再上报。</h2><p id="report-description">在项目目录打开终端。先预览将要发送的内容，确认后运行上报命令，随后刷新本页。</p><div class="privacy-label">✓ 只发送汇总，不发送对话和代码</div></div><div class="command-list"><div class="command-item"><div class="command-label"><span><b>1</b> 预览本周汇总</span><button type="button" class="copy-button" data-command="preview">复制命令</button></div><code id="preview-command">node scripts/report-usage.mjs --preview</code></div><div class="command-item"><div class="command-label"><span><b>2</b> 确认后主动上报</span><button type="button" class="copy-button" data-command="submit">复制命令</button></div><code id="submit-command">node scripts/report-usage.mjs --submit</code></div><p id="command-note" class="command-note">以上命令默认处理本周。每次上报更新该周的数据，重复运行不会把数字累加一遍。</p><p id="copy-feedback" role="status" aria-live="polite"></p></div></section>
-<footer class="site-footer"><div><strong>Yak Yogurt</strong><span>有酸奶，让创造被看见。</span></div><p><span id="mode-footer">本机验证版 · 尚未公开上线</span><br>自然周：周一 00:00—周日 23:59:59，北京时间</p></footer>
-</main></body></html>
+  <div id="error-banner" class="error-banner" role="alert" hidden><div><strong>暂时没能读取数据</strong><p id="error-message"></p></div><button type="button" id="retry-button" class="text-button">重新读取</button></div>
+
+  <section id="panel-board" class="tab-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-board">
+    <div class="section-top"><div><p class="eyebrow">DAILY / AI CODING</p><h1>日用量榜</h1></div><button id="refresh-button" type="button" class="text-button">刷新数据 ↻</button></div>
+    <div class="date-toolbar" aria-label="选择榜单日期">
+      <div class="date-shortcuts"><button id="date-today" type="button" class="date-button" aria-pressed="true">今天</button><button id="date-yesterday" type="button" class="date-button" aria-pressed="false">昨天</button></div>
+      <label class="date-picker"><span>选日期</span><input id="selected-date" type="date" aria-label="选择北京时间榜单日期"></label>
+    </div>
+    <div class="day-caption"><h2 id="day-label">正在读取…</h2><span>北京时间</span></div>
+    <p id="day-timing" class="day-note" role="status" aria-live="polite">正在读取所选日期的已保存汇总。</p>
+    <section id="day-board" class="leaderboard-panel" aria-label="所选日期用量榜" aria-busy="true">
+      <table class="day-table"><caption class="sr-only">排名、创作者、当天工具、作品和日消耗 tokens</caption><thead><tr><th scope="col">排名</th><th scope="col">创作者</th><th scope="col">工具</th><th scope="col">作品</th><th scope="col">日消耗 <span>tokens</span></th></tr></thead><tbody id="day-rows"></tbody></table>
+      <div id="empty-state" class="empty-state" hidden><span class="empty-icon" aria-hidden="true">↗</span><h3 id="empty-title"></h3><p id="empty-description"></p></div>
+    </section>
+    <p id="board-note" class="small-note">只展示已保存的上报记录；没有记录不等于实际用量为零。</p>
+  </section>
+
+  <section id="panel-usage" class="tab-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-usage" hidden>
+    <div class="section-top"><div><p class="eyebrow">UNDER THE NUMBERS</p><h1>用量</h1></div></div>
+    <p id="usage-period" class="section-description">查看所选日期所在自然周的用量。</p>
+    <section id="overview" class="overview" aria-label="所选日期所在周的用量概览" aria-busy="true">
+      <div class="primary-stat"><p class="stat-label">所在周总用量</p><div class="total-number"><strong id="total-tokens">—</strong><span id="total-unit">tokens</span></div><p class="stat-footnote">输入、输出、缓存写入和缓存读取之和</p><div class="overview-footer"><span>不含缓存读取</span><strong id="without-cache">—</strong></div></div>
+      <div class="secondary-stat"><p class="stat-label">API 参考估算</p><p id="cost-estimate">—</p><p id="cost-detail">按公开 API 价格估算，不是订阅费用或实际账单。</p></div>
+    </section>
+    <p id="update-status" class="small-note">正在读取已保存汇总…</p>
+    <div id="diagnostics-note" class="diagnostics-note" hidden><strong>部分日志未计入，请以预览提示为准。</strong><ul id="diagnostics-list"></ul><p>这里只显示固定分类和计数，不显示日志原文。</p></div>
+    <div class="details-header"><h2>四类用量</h2><div class="tool-filters" role="group" aria-label="筛选所在周的明细工具"><button class="filter-button active" type="button" data-tool="all" aria-pressed="true">全部</button><button class="filter-button" type="button" data-tool="Claude Code" aria-pressed="false">Claude Code</button><button class="filter-button" type="button" data-tool="Codex" aria-pressed="false">Codex</button></div></div>
+    <p id="filter-caption" class="small-note">下方是所在周明细，筛选不改变首页日榜。</p>
+    <div class="token-grid"><article class="token-card"><span class="token-label"><i class="input"></i>输入</span><strong id="detail-input">—</strong><span>未命中缓存的输入</span></article><article class="token-card"><span class="token-label"><i class="output"></i>输出</span><strong id="detail-output">—</strong><span>包含推理输出，不重复累加</span></article><article class="token-card"><span class="token-label"><i class="write"></i>缓存写入</span><strong id="detail-write">—</strong><span>本次建立的缓存</span></article><article class="token-card"><span class="token-label"><i class="read"></i>缓存读取</span><strong id="detail-read">—</strong><span>重复使用的已有输入</span></article></div>
+    <div class="detail-panels"><article class="chart-panel"><div class="panel-heading"><h2>每日走势</h2><span>所在周每日 tokens</span></div><div id="daily-chart" aria-label="所在周每日用量柱状图"></div><p id="chart-caption" class="small-note"></p></article><article class="models-panel"><div class="panel-heading"><h2>使用的模型</h2><span id="model-count">—</span></div><div id="model-list"></div><p class="small-note">模型名称来自上报汇总，无法识别时显示“未知模型”。</p></article></div>
+  </section>
+
+  <section id="panel-me" class="tab-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-me" hidden>
+    <div class="section-top"><div><p class="eyebrow">YOUR SPACE</p><h1>我的</h1></div></div>
+    <article class="info-card personal-placeholder"><span class="placeholder-mark" aria-hidden="true">○</span><h2>个人中心还未接入</h2><p>邀请接入、头像和作品编辑将在下一步接入。当前页面没有登录或上传入口，也不会替你创建账号。</p><p class="small-note">已有上报配置的电脑，可以继续手动上报；操作方法在「关于」里。</p><button type="button" class="primary-button" data-open-tab="about">查看上报说明</button></article>
+  </section>
+
+  <section id="panel-about" class="tab-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-about" hidden>
+    <div class="section-top"><div><p class="eyebrow">ABOUT YAK YOGURT</p><h1>关于</h1></div></div>
+    <article class="info-card"><h2>看见投入，认识同行</h2><p>有酸奶从 AI 编程用量开始，连接正在做东西的人。用量用来记录投入，不代表能力或作品质量。</p><p id="scope-note">当前展示已配置电脑上报的 Claude Code 与 Codex 汇总。</p></article>
+    <article class="project-card"><div class="project-symbol" aria-hidden="true">↗</div><div class="project-copy"><p id="project-owner">当前作品</p><h2 id="project-name">有酸奶 Yak Yogurt</h2><p id="project-description">认识在西藏使用 AI 创作与编程的同行</p></div><a id="project-link" target="_blank" rel="noopener noreferrer" hidden>看看作品 ↗</a></article>
+    <article class="info-card"><h2>统计口径与隐私</h2><ul class="plain-list"><li>日榜按北京时间的自然日展示；今天尚未结束，数字会随手动上报更新。</li><li>输入、输出、缓存写入、缓存读取四列互不重复；总量包含缓存读取，同时另列不含缓存读取的用量。</li><li>没有所选日期的上报行时显示「未上报」，不把缺失记录写成零。明确上报了零用量，才显示 0。</li><li>只接收日期、工具、模型和用量汇总，不接收提示词、回答、代码或本机路径。</li><li>汇总来自本机可读取的日志，不代表整个账号的全部用量；参考估算不是实际账单。</li></ul></article>
+    <section id="how-to-report" class="report-section" aria-labelledby="report-title"><div class="report-intro"><p class="eyebrow">LOCAL FIRST</p><h2 id="report-title">看清楚，再上报</h2><p id="report-description">先在项目目录预览，确认后主动上报，再刷新网页。</p><p class="privacy-label">✓ 只发送汇总，不发送对话和代码</p></div><div class="command-list"><div class="command-item"><div class="command-label"><span>1 · 预览本周汇总</span><button type="button" class="copy-button" data-command="preview">复制命令</button></div><code id="preview-command">node scripts/report-usage.mjs --preview</code></div><div class="command-item"><div class="command-label"><span>2 · 确认后主动上报</span><button type="button" class="copy-button" data-command="submit">复制命令</button></div><code id="submit-command">node scripts/report-usage.mjs --submit</code></div><p id="command-note" class="small-note">命令处理本周；重复上报更新同一份快照，不会重复累加。</p><p id="copy-feedback" role="status" aria-live="polite"></p></div></section>
+    <footer class="site-footer"><strong>Yak Yogurt</strong><p id="mode-footer">本机汇总 · 手动上报后更新</p><p>自然日与自然周均按北京时间计算。</p></footer>
+  </section>
+</main>
+
+</body>
+</html>
