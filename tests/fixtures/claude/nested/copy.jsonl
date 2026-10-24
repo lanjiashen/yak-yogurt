@@ -1,2 +1,0 @@
-{"type":"assistant","timestamp":"2026-10-16T16:00:00.000Z","message":{"id":"message-1","usage":{"input_tokens":10,"output_tokens":3,"cache_creation_input_tokens":5,"cache_read_input_tokens":7}}}
-{"type":"user","timestamp":"2026-10-22T16:00:02.000Z","message":{"id":"not-assistant","usage":{"input_tokens":999,"output_tokens":999},"content":"FAKE_PRIVATE_CONTENT_NOT_FOR_OUTPUT"}}
