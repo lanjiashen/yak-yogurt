@@ -94,6 +94,95 @@ export function dayBoardFromWeekly(data, date, { now = new Date() } = {}) {
     is_today: date === today, is_future: date > today };
 }
 
+
+export const COMMUNITY_API_BASE = 'https://cloud1-d1gwtdw2y9153c1b3-1499259329.ap-shanghai.app.tcloudbase.com/yak-yogurt/';
+export const PROFILE_FIELDS = Object.freeze(['nickname','city','project_name','project_description','project_url','avatar_ref','cover_ref']);
+const canonicalKey = value => typeof value === 'string' && /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(value);
+const isoDateTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+export function mediaReference(value, slot) {
+  if (value === '') return '';
+  const match = typeof value === 'string' ? /^m_[A-Za-z0-9_-]{43}_(avatar|cover)_[a-f0-9]{64}$/.exec(value) : null;
+  if (!match || (slot && match[1] !== slot)) throw new Error('图片引用无效。');
+  return value;
+}
+export function publicProfile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('公开资料格式不完整。');
+  const result = {};
+  const limits = { nickname:40,city:30,project_name:80,project_description:240,project_url:500,avatar_ref:160,cover_ref:160 };
+  for (const key of PROFILE_FIELDS) {
+    if (typeof value[key] !== 'string' || value[key].length > limits[key] || /[\u0000-\u001f]/.test(value[key])) throw new Error('公开资料格式或长度无效。');
+    result[key] = value[key];
+  }
+  if (result.project_url && (!safeLink(result.project_url) || new URL(result.project_url).protocol !== 'https:')) throw new Error('作品链接请使用不含账号信息的 HTTPS 地址。');
+  mediaReference(result.avatar_ref, 'avatar'); mediaReference(result.cover_ref, 'cover');
+  return result;
+}
+function checkedTotals(value) {
+  const totals = summarizeUsage([value]);
+  for (const field of TOTAL_FIELDS) if (value?.[field] !== totals[field]) throw new Error('汇总与四类计数不一致。');
+  return totals;
+}
+export function normalizeV2Board(value, date) {
+  if (!isDate(date) || value?.schema_version !== 2 || value.date !== date || value.timezone !== 'Asia/Shanghai' ||
+      !Array.isArray(value.rows) || !Number.isSafeInteger(value.participant_count) || value.participant_count < 0) throw new Error('日榜数据格式不完整。');
+  const users = new Set();
+  const rows = value.rows.map(function (row) {
+    if ((!canonicalKey(row.user_id) && row.user_id !== 'legacy-owner') || users.has(row.user_id) ||
+        !Number.isSafeInteger(row.rank) || row.rank < 1 || !Number.isSafeInteger(row.total_tokens) || row.total_tokens < 0 ||
+        !Array.isArray(row.tools) || row.tools.some(tool => !TOOL_ORDER.includes(tool)) || new Set(row.tools).size !== row.tools.length) throw new Error('日榜创作者或用量记录无效。');
+    users.add(row.user_id);
+    return { ...publicProfile(row), user_id:row.user_id,rank:row.rank,tools:[...row.tools],
+      total_tokens:row.total_tokens,status:row.total_tokens === 0 ? 'reported_zero' : 'reported' };
+  });
+  const totals = checkedTotals(value.totals);
+  const rowSum = rows.reduce((sum,row) => sum + row.total_tokens,0);
+  if (!Number.isSafeInteger(rowSum) || rowSum !== totals.total_tokens) throw new Error('日榜行与总量不一致。');
+  return { date,rows,totals,participant_count:value.participant_count,updated_at:isoDateTime(value.updated_at) ? value.updated_at : null };
+}
+export function normalizeV2Detail(value, date, user = 'all') {
+  if (value?.schema_version !== 2 || value.date !== date || !isDate(date) ||
+      value.scope !== (user === 'all' ? 'all' : 'member') ||
+      (user !== 'all' && value.user_id !== user)) throw new Error('用量范围与请求不一致。');
+  const daily = normalizeUsageRows(value.daily);
+  if (daily.some(row => row.date !== date)) throw new Error('单日明细包含其他日期。');
+  const totals = checkedTotals(value.totals), sum = summarizeUsage(daily);
+  if (TOTAL_FIELDS.some(field => totals[field] !== sum[field])) throw new Error('明细与汇总不一致。');
+  return { ...value,daily,totals,profile:value.profile === null ? null : publicProfile(value.profile) };
+}
+export function sessionRecord(value, now = new Date()) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== 2 || !canonicalKey(value.session_token) ||
+      !isoDateTime(value.expires_at) || Date.parse(value.expires_at) <= now.getTime()) return null;
+  return { session_token:value.session_token,expires_at:value.expires_at };
+}
+export function generatedClientConfig(value) {
+  const keys = ['api_version','endpoint','expected_host','source_id','token'];
+  const expected = new URL(COMMUNITY_API_BASE);
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== keys.length ||
+      Object.keys(value).some(key => !keys.includes(key)) || value.api_version !== 2 ||
+      value.endpoint !== COMMUNITY_API_BASE.replace(/\/$/,'') || value.expected_host !== expected.hostname ||
+      !canonicalKey(value.source_id) || !canonicalKey(value.token)) throw new Error('专用配置格式无效，未提供下载。');
+  return Object.fromEntries(keys.map(key => [key,value[key]]));
+}
+export function imageOutputSize(slot, width, height) {
+  if (!['avatar','cover'].includes(slot) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
+      width < 1 || height < 1 || width * height > 80000000) throw new Error('图片尺寸过大或无效。');
+  if (slot === 'avatar') { const side = Math.min(512,width,height); return {width:side,height:side}; }
+  const ratio = Math.min(1,1280 / Math.max(width,height),Math.sqrt(1000000 / (width * height)));
+  return {width:Math.max(1,Math.floor(width * ratio)),height:Math.max(1,Math.floor(height * ratio))};
+}
+
+export function mayUseV1(method, status) { return method === 'GET' && status === 404; }
+export function memberRecord(value) {
+  if (value?.schema_version !== 2 || !canonicalKey(value.user_id) || typeof value.email !== 'string' ||
+      !value.email || value.email.length > 254 || !isoDateTime(value.email_verified_at) || !isoDateTime(value.consent_at) ||
+      !Number.isSafeInteger(value.profile_version) || value.profile_version < 0 ||
+      typeof value.device_bound !== 'boolean' || typeof value.is_admin !== 'boolean') throw new Error('个人资料响应不完整。');
+  return {schema_version:2,user_id:value.user_id,email:value.email,email_verified_at:value.email_verified_at,
+    consent_at:value.consent_at,profile_version:value.profile_version,profile:publicProfile(value.profile),
+    device_bound:value.device_bound,is_admin:value.is_admin};
+}
+
 function initialize() {
   const $ = function (selector) { return document.querySelector(selector); };
   const isPublic = document.body.dataset.mode === 'public';
@@ -111,7 +200,8 @@ function initialize() {
     report: '在项目目录打开终端。先预览本周统计，确认后手动上报到本机，再刷新网页。网页切换日期不会重新采集日志。',
     retry: '请确认本机服务仍在运行，再重新读取。',
   };
-  const state = { data: null, day: null, selectedDate: beijingDate(), tool: 'all', pending: false, activeTab: 'board' };
+  const state = { data:null,day:null,selectedDate:beijingDate(),tool:'all',pending:false,activeTab:'board',apiVersion:null,
+    detail:null,scopeUser:'all',detailRequest:0,capabilities:null,member:null,session:null,challenge:null,authBusy:false };
   const integerFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });
   const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
   const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -180,9 +270,13 @@ function initialize() {
       rank.append(make('span', 'day-rank', row.rank === null ? '—' : String(row.rank).padStart(2, '0')));
       const creatorCell = make('td', 'creator-cell');
       const creator = make('div', 'creator');
-      creator.append(make('span', 'creator-avatar', Array.from(row.nickname || '我')[0]));
+      creator.append(makeAvatar(row));
       const identity = make('div');
-      identity.append(make('span', 'creator-name', row.nickname || '未命名创作者'));
+      if (row.user_id) {
+        const personal = make('button','creator-name creator-button',row.nickname || '未命名创作者');
+        personal.type='button';personal.setAttribute('aria-label','查看 '+(row.nickname||'该创作者')+' 的个人用量');
+        personal.addEventListener('click',function(){showTab('usage');loadV2Detail(state.selectedDate,row.user_id);});identity.append(personal);
+      } else identity.append(make('span','creator-name',row.nickname || '未命名创作者'));
       if (row.city) identity.append(make('span', 'creator-city', row.city));
       creator.append(identity);
       creatorCell.append(creator);
@@ -195,6 +289,7 @@ function initialize() {
       const workCell = make('td', 'project-cell');
       workCell.dataset.label = '作品';
       const href = safeLink(row.project_url);
+      if (row.cover_ref) {const cover=make('img','work-cover');cover.alt='';setMediaImage(cover,row.cover_ref);workCell.append(cover);}
       if (href) {
         const link = make('a', '', row.project_name || '查看作品');
         link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
@@ -272,12 +367,18 @@ function initialize() {
   }
   function renderDetails() {
     if (!state.day) return;
-    const rows = state.day.weekly_rows.filter(function (row) { return state.tool === 'all' || row.tool === state.tool; });
+    if (state.apiVersion === 2 && !state.detail) return;
+    const sourceRows = state.apiVersion === 2 ? state.detail.daily : state.day.weekly_rows;
+    const hasRows = state.apiVersion === 2 ? sourceRows.length > 0 : state.day.has_snapshot;
+    const rows = sourceRows.filter(function (row) { return state.tool === 'all' || row.tool === state.tool; });
     const totals = summarizeUsage(rows);
-    text('#detail-input', state.day.has_snapshot ? fullNumber(totals.input_tokens) : '—'); text('#detail-output', state.day.has_snapshot ? fullNumber(totals.output_tokens) : '—');
-    text('#detail-write', state.day.has_snapshot ? fullNumber(totals.cache_creation_input_tokens) : '—'); text('#detail-read', state.day.has_snapshot ? fullNumber(totals.cache_read_input_tokens) : '—');
-    text('#filter-caption', (state.tool === 'all' ? '下方为全部工具' : '下方仅显示 ' + state.tool) + '的所在周明细；筛选不改变首页日榜或上方周总量。');
-    renderChart(rows, state.day.week_start); renderModels(rows);
+    text('#detail-input', hasRows ? fullNumber(totals.input_tokens) : '—'); text('#detail-output', hasRows ? fullNumber(totals.output_tokens) : '—');
+    text('#detail-write', hasRows ? fullNumber(totals.cache_creation_input_tokens) : '—'); text('#detail-read', hasRows ? fullNumber(totals.cache_read_input_tokens) : '—');
+    const period = state.apiVersion === 2 ? '所选日' : '所在周';
+    text('#filter-caption',(state.tool === 'all'?'下方为全部工具':'下方仅显示 '+state.tool)+'的'+period+'明细；筛选不改变首页日榜或上方总量。');
+    if(state.apiVersion===2){text('#chart-heading','当日工具用量');text('#chart-kind','所选日工具分布');renderV2ToolChart(rows);}
+    else{$('#daily-chart').style.gridTemplateColumns='';text('#chart-heading','每日走势');text('#chart-kind','所在周每日 tokens');renderChart(rows,state.day.week_start);}
+    renderModels(rows);
   }
   function costLabel(estimate) {
     if (!estimate || typeof estimate.min !== 'number' || typeof estimate.max !== 'number' ||
@@ -287,6 +388,10 @@ function initialize() {
   }
   function renderUsage() {
     const data = state.data, day = state.day;
+    $('#overview').setAttribute('aria-label','所选日期所在周的用量概览');
+    $('.tool-filters').setAttribute('aria-label','筛选所在周的明细工具');
+    $('#daily-chart').setAttribute('aria-label','所在周每日用量柱状图');
+    text('#aggregate-caption','所在周总用量');$('#usage-all-scope').hidden=true;$('#usage-member-profile').hidden=true;$('#usage-error').hidden=true;
     const totals = summarizeUsage(day.weekly_rows), compact = compactNumber(totals.total_tokens);
     text('#usage-period', '所选日期所在自然周：' + day.week_start + ' 至 ' + addDays(day.week_start, 6) + ' · 北京时间。以下展示整周，不是单日合计。');
     text('#total-tokens', day.has_snapshot ? compact.number : '—'); $('#total-tokens').title = day.has_snapshot ? fullNumber(totals.total_tokens) + ' tokens' : '尚无已保存快照';
@@ -314,50 +419,371 @@ function initialize() {
     for (const id of ['#date-today', '#date-yesterday', '#selected-date', '#refresh-button', '#retry-button']) $(id).disabled = pending;
     $('#day-board').setAttribute('aria-busy', String(pending)); $('#overview').setAttribute('aria-busy', String(pending));
   }
+
+  const SESSION_KEY = 'yak-yogurt-member-session-v2';
+  const transientDownloads = new Set();
+  function mediaUrl(ref) {
+    mediaReference(ref);
+    const url = new URL('api/v2/media',apiBase); url.searchParams.set('ref',ref); return url.href;
+  }
+  function setMediaImage(node, ref) {
+    node.hidden = !ref;
+    if (!ref) { node.removeAttribute('src'); return; }
+    mediaReference(ref);
+    node.crossOrigin = 'anonymous'; node.referrerPolicy = 'no-referrer'; node.src = mediaUrl(ref);
+    node.onerror = function () { node.hidden = true; };
+  }
+  function makeAvatar(profile) {
+    const box = make('span','creator-avatar',Array.from(profile.nickname || '我')[0]);
+    if (profile.avatar_ref) {
+      const image = make('img','member-avatar'); image.alt = ''; setMediaImage(image,profile.avatar_ref); box.append(image);
+    }
+    return box;
+  }
+  async function v2Request(path, {method = 'GET',body,authorized = false} = {}) {
+    const url = new URL('api/v2/' + path,apiBase);
+    const controller = new AbortController(), timeout = setTimeout(function(){controller.abort();},15000);
+    try {
+      if (authorized && !state.session) throw new Error('请先通过邮箱验证码登录。');
+      const response = await fetch(url,{method,credentials:'omit',cache:'no-store',redirect:'error',signal:controller.signal,
+        headers:{Accept:'application/json',...(body !== undefined ? {'Content-Type':'application/json'} : {}),
+          ...(authorized ? {Authorization:'Bearer ' + state.session.session_token} : {})},
+        ...(body !== undefined ? {body:JSON.stringify(body)} : {})});
+      let value;
+      try { value = await response.json(); } catch { const error = new Error('服务暂未提供可读取的响应。'); error.status = response.status; throw error; }
+      if (!response.ok) {
+        const error = new Error(typeof value?.error === 'string' ? value.error : '请求暂未完成，请稍后重试。');
+        error.status = response.status; throw error;
+      }
+      return value;
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('请求超时，请稍后重试。');
+      if (error instanceof TypeError) throw new Error(mode.retry);
+      throw error;
+    } finally { clearTimeout(timeout); }
+  }
+  function memberMessage(value) { text('#member-message',value); }
+  function clearSession() {
+    state.session = null; state.member = null; state.challenge = null;
+    try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+    for (const cleanup of transientDownloads) cleanup(); transientDownloads.clear();
+    $('#device-download').replaceChildren();
+    $('#member-signed-in').hidden = true; $('#member-signed-out').hidden = false;
+    $('#verify-code-form').hidden = true; $('#admin-invites').hidden = true; $('#invite-result').hidden = true;
+    $('#invite-link').value = ''; $('#auth-code').value = ''; $('#public-consent').checked = false;
+    $('#member-email').textContent = '';
+    for (const field of ['nickname','city','project-name','description','project-url','avatar-ref','cover-ref']) $('#profile-' + field).value = '';
+    for (const slot of ['avatar','cover']) { $('#profile-' + slot + '-file').value = ''; setMediaImage($('#profile-' + slot + '-preview'),''); }
+  }
+  function updateMemberControls() {
+    const capabilities = state.capabilities;
+    $('#request-code-button').disabled = state.authBusy || !capabilities?.enabled || !capabilities?.auth_ready;
+    for (const node of document.querySelectorAll('[data-member-write]')) node.disabled = state.authBusy || !state.member;
+    for (const node of document.querySelectorAll('[data-media-slot]')) node.disabled = state.authBusy || !state.member || !capabilities?.media_ready;
+    $('#member-logout').disabled = state.authBusy;
+    if (state.member) {
+      $('#device-create').hidden = state.member.device_bound; $('#device-rotate').hidden = !state.member.device_bound; $('#device-revoke').hidden = !state.member.device_bound;
+      text('#device-status',state.member.device_bound ? '当前有一份有效上报配置；完整密钥不会在页面显示。' : '还没有有效上报配置。');
+      text('#media-status',capabilities?.media_ready ? '选图后会先上传，保存资料才将图片引用公开到个人资料。' : '图片服务尚未配置，可以先保存文字资料。');
+    }
+  }
+  async function memberAction(operation) {
+    if (state.authBusy) return;
+    state.authBusy = true; updateMemberControls();
+    try { await operation(); }
+    catch (error) {
+      if (error?.status === 401 && state.session) { clearSession(); memberMessage('登录已失效，请重新获取邮箱验证码。'); }
+      else memberMessage(error instanceof Error ? error.message : '本次操作未完成，请稍后重试。');
+    } finally { state.authBusy = false; updateMemberControls(); }
+  }
+  function renderMember(value) {
+    value = memberRecord(value);
+    const profile = value.profile;
+    state.member = value;
+    $('#member-signed-out').hidden = true; $('#member-signed-in').hidden = false;
+    text('#member-name',profile.nickname || '个人资料');
+    text('#member-email',value.email + (value.email_verified_at ? ' · 邮箱已验证' : ''));
+    const bindings = {'nickname':'nickname','city':'city','project-name':'project_name','description':'project_description','project-url':'project_url','avatar-ref':'avatar_ref','cover-ref':'cover_ref'};
+    for (const [id,key] of Object.entries(bindings)) $('#profile-' + id).value = profile[key];
+    setMediaImage($('#profile-avatar-preview'),profile.avatar_ref); setMediaImage($('#profile-cover-preview'),profile.cover_ref);
+    $('#admin-invites').hidden = !value.is_admin;
+    updateMemberControls();
+  }
+  async function loadCapabilities() {
+    try {
+      const value = await v2Request('config');
+      if (value?.schema_version !== 2 || ['enabled','auth_ready','media_ready'].some(key => typeof value[key] !== 'boolean')) throw new Error('能力响应不完整。');
+      state.capabilities = value;
+      if (!state.session) memberMessage(!value.enabled ? '个人中心暂未启用，公开日榜仍可查看。' :
+        !value.auth_ready ? '邮箱验证码尚未配置，目前无法发送；公开日榜仍可查看。' : '用邮箱验证码加入或登录，首次加入需要邀请码。');
+    } catch (error) {
+      state.capabilities = {enabled:false,auth_ready:false,media_ready:false};
+      if (!state.session) memberMessage(error?.status === 404 ? '当前后端尚未开通个人中心，公开日榜仍可查看。' : '暂时无法确认个人中心能力，请稍后刷新。');
+    } finally { updateMemberControls(); }
+  }
+  async function restoreMemberSession() {
+    let saved;
+    try { saved = sessionRecord(JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null')); } catch {}
+    if (!saved) { try { sessionStorage.removeItem(SESSION_KEY); } catch {} return; }
+    state.session = saved;
+    try { renderMember(await v2Request('me',{authorized:true})); memberMessage('已恢复本次浏览器的登录状态。'); }
+    catch { clearSession(); memberMessage('原登录状态已失效，请重新获取邮箱验证码。'); }
+  }
+  function readProfile() {
+    return publicProfile({
+      nickname:$('#profile-nickname').value.trim(),city:$('#profile-city').value.trim(),
+      project_name:$('#profile-project-name').value.trim(),project_description:$('#profile-description').value.trim(),
+      project_url:$('#profile-project-url').value.trim(),avatar_ref:$('#profile-avatar-ref').value,cover_ref:$('#profile-cover-ref').value,
+    });
+  }
+  async function jpegForUpload(file, slot) {
+    if (!file || !/^image\/(?:jpeg|png|webp|gif|avif|heic|heif)$/.test(file.type) || file.size > 15 * 1024 * 1024) throw new Error('请选择15MB以内可读取的照片（JPEG、PNG等）。');
+    const localUrl = URL.createObjectURL(file), image = new Image();
+    try {
+      await new Promise(function(resolve,reject){image.onload = resolve; image.onerror = function(){reject(new Error('浏览器无法读取这张图，请换成 JPEG 或 PNG。'));}; image.src = localUrl;});
+      let size = imageOutputSize(slot,image.naturalWidth,image.naturalHeight);
+      const canvas = document.createElement('canvas'), context = canvas.getContext('2d');
+      if (!context) throw new Error('当前浏览器暂不能处理图片。');
+      const limit = slot === 'avatar' ? 128 * 1024 : 256 * 1024;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        canvas.width = size.width; canvas.height = size.height;
+        context.fillStyle = '#ffffff'; context.fillRect(0,0,size.width,size.height);
+        if (slot === 'avatar') {
+          const side = Math.min(image.naturalWidth,image.naturalHeight);
+          context.drawImage(image,(image.naturalWidth-side)/2,(image.naturalHeight-side)/2,side,side,0,0,size.width,size.height);
+        } else context.drawImage(image,0,0,size.width,size.height);
+        const quality = Math.max(.35,.88 - attempt * .08);
+        const blob = await new Promise(function(resolve){canvas.toBlob(resolve,'image/jpeg',quality);});
+        if (!blob) throw new Error('图片转换未完成，请换一张图。');
+        if (blob.size <= limit) {
+          const bytes = new Uint8Array(await blob.arrayBuffer()), parts = [];
+          for (let index = 0; index < bytes.length; index += 8192) parts.push(String.fromCharCode(...bytes.subarray(index,index+8192)));
+          return btoa(parts.join(''));
+        }
+        if (quality <= .4) size = {width:Math.max(1,Math.floor(size.width * .8)),height:Math.max(1,Math.floor(size.height * .8))};
+      }
+      throw new Error('图片仍然过大，请换一张更简单的图片。');
+    } finally { image.src = ''; URL.revokeObjectURL(localUrl); }
+  }
+  async function generateDevice(action) {
+    await memberAction(async function(){
+      const response = await v2Request('me/device',{method:'POST',body:{action},authorized:true});
+      if (response?.ok !== true) throw new Error('服务未确认配置生成，未提供下载。');
+      const config = generatedClientConfig(response.client_config);
+      for (const cleanup of transientDownloads) cleanup(); transientDownloads.clear();
+      const holder = $('#device-download'); holder.replaceChildren();
+      const blob = new Blob([JSON.stringify(config,null,2) + '\n'],{type:'application/json'});
+      const url = URL.createObjectURL(blob), link = make('a','primary-button','下载 public-client-v2.json');
+      link.href = url; link.download = 'public-client-v2.json';
+      const cleanup = function(){URL.revokeObjectURL(url);link.removeAttribute('href');link.setAttribute('aria-disabled','true');};
+      transientDownloads.add(cleanup);
+      link.addEventListener('click',function(){setTimeout(function(){cleanup();transientDownloads.delete(cleanup);link.textContent = '本次下载已触发；配置不再重复展示';},1000);},{once:true});
+      holder.append(make('p','small-note','请先下载并解压上方采集工具，再点击下载配置，放入工具根目录的 .runtime 文件夹。配置仅在这次生成时提供，不会自动下载或保存到浏览器会话存储。'),link);
+      state.member.device_bound = true; memberMessage('专用配置已生成，请主动点击下载并妥善保管。');
+    });
+  }
+  function renderV2Board(board) {
+    const today = beijingDate();
+    state.day = {date:board.date,rows:board.rows,has_snapshot:board.rows.length>0,updated_at:board.updated_at,
+      status:board.rows.length?'reported':'not_reported',is_today:board.date===today,is_future:board.date>today,profile:board.rows[0] || {}};
+    renderDay();
+    if (!board.rows.length) {
+      text('#empty-title','这一天还没有已上报记录');
+      text('#empty-description','未上报不等于实际用量为 0；有明确零用量上报时才显示 0。');
+      text('#day-timing',(board.date===today?'本日尚未结束':'该日已结束') + ' · 还没有当日上报汇总');
+    }
+    text('#board-note','日榜展示已授权公开的当日汇总。点创作者可查看其个人明细；工具只列当日有用量的工具。');
+  }
+  function renderV2ToolChart(rows) {
+    const chart = $('#daily-chart'); chart.replaceChildren(); chart.style.gridTemplateColumns = 'repeat(2,minmax(0,1fr))';
+    const values = TOOL_ORDER.map(tool => ({tool,total:summarizeUsage(rows.filter(row=>row.tool===tool)).total_tokens}));
+    const max = Math.max(1,...values.map(value=>value.total));
+    for (const value of values) {
+      const column = make('div','chart-column'), number = compactNumber(value.total), track = make('div','chart-track'), bar = make('div','chart-bar' + (value.total?'':' zero'));
+      column.setAttribute('aria-label',value.tool + '，' + fullNumber(value.total) + ' tokens');
+      column.append(make('span','chart-value',number.number + number.unit.replace(' tokens','').replace('tokens','')));
+      bar.style.height = (value.total?Math.max(3,value.total/max*100):2) + '%'; track.append(bar);
+      column.append(track,make('span','chart-day',value.tool)); chart.append(column);
+    }
+    text('#chart-caption','这里只展示所选日的工具分布，不把其他日期当作零。');
+  }
+  function renderV2Usage() {
+    const detail = state.detail;
+    $('#overview').setAttribute('aria-label','所选日的用量概览');
+    $('.tool-filters').setAttribute('aria-label','筛选所选日的明细工具');
+    $('#daily-chart').setAttribute('aria-label','所选日工具用量柱状图');
+    text('#aggregate-caption','所选日总用量');text('#chart-heading','当日工具用量');text('#chart-kind','所选日工具分布');
+    $('#usage-all-scope').hidden = state.scopeUser === 'all';
+    if (!detail) {
+      text('#usage-period',state.selectedDate + ' · 正在读取所选范围的当日用量');
+      return;
+    }
+    const scope = detail.scope === 'all' ? '全站' : (detail.profile?.nickname || '该创作者') + '个人';
+    const hasRows = detail.daily.length > 0, compact = compactNumber(detail.totals.total_tokens);
+    text('#usage-period',detail.date + ' · ' + scope + '当日汇总；不是整周或累计总量。');
+    text('#aggregate-caption',scope + '当日总用量');
+    text('#total-tokens',hasRows?compact.number:'—'); text('#total-unit',hasRows?compact.unit:'tokens');
+    $('#total-tokens').title = hasRows?fullNumber(detail.totals.total_tokens) + ' tokens':'还没有当日记录';
+    text('#without-cache',hasRows?fullNumber(detail.totals.total_without_cache_read_tokens) + ' tokens':'—');
+    text('#cost-estimate',detail.estimate?costLabel(detail.estimate):'未提供估算');
+    text('#cost-detail','当前展示所选日与所选范围。接口未提供的价格不沿用旧周估算；参考价也不等于实际账单。');
+    text('#update-status',(safeTimestamp(detail.updated_at)?'最近上报 ' + safeTimestamp(detail.updated_at) + ' · 北京时间':'所选范围还没有当日上报') + ' · ' + mode.saved);
+    const diagnostics = detail.diagnostics && typeof detail.diagnostics === 'object' ? Object.entries(detail.diagnostics) : [];
+    $('#diagnostics-list').replaceChildren();
+    for (const [name,count] of diagnostics) if (Number.isSafeInteger(count) && count > 0) $('#diagnostics-list').append(make('li','',name + '：' + fullNumber(count)));
+    $('#diagnostics-note').hidden = !$('#diagnostics-list').children.length;
+    const profileCard = $('#usage-member-profile'); profileCard.replaceChildren(); profileCard.hidden = !detail.profile;
+    if (detail.profile) {
+      const profile = detail.profile; profileCard.append(makeAvatar(profile));
+      const info = make('div','project-copy'); info.append(make('h2','',profile.nickname),make('p','small-note',profile.city || ''));
+      if (profile.project_name) info.append(make('p','',profile.project_name));
+      if (profile.project_description) info.append(make('p','small-note',profile.project_description));
+      const href = safeLink(profile.project_url);
+      if (href) { const link = make('a','text-button','查看作品 ↗');link.href=href;link.target='_blank';link.rel='noopener noreferrer';info.append(link); }
+      if (profile.cover_ref) {const cover=make('img','profile-cover-preview');cover.alt='作品封面';setMediaImage(cover,profile.cover_ref);info.append(cover);}
+      profileCard.append(info);
+    }
+    renderDetails();
+  }
+  async function loadV2Detail(date, user = 'all') {
+    state.scopeUser = user; state.detail = null; const requestId = ++state.detailRequest;
+    $('#usage-error').hidden = true;
+    for (const id of ['#total-tokens','#without-cache','#cost-estimate','#detail-input','#detail-output','#detail-write','#detail-read','#model-count']) text(id,'—');
+    $('#model-list').replaceChildren(); $('#daily-chart').replaceChildren(); $('#usage-member-profile').hidden=true;
+    renderV2Usage();
+    try {
+      const query = new URLSearchParams({date,user});
+      const detail = normalizeV2Detail(await v2Request('detail?' + query),date,user);
+      if (requestId !== state.detailRequest || date !== state.selectedDate) return;
+      state.detail = detail; renderV2Usage();
+    } catch (error) {
+      if (requestId !== state.detailRequest || date !== state.selectedDate) return;
+      text('#usage-error',error instanceof Error?error.message:'当日明细暂未读取。'); $('#usage-error').hidden=false;
+      text('#usage-period',date + ' · 当日明细暂未读取；首页日榜仍可查看。');
+    }
+  }
+  function connectMemberForms() {
+    const hash = new URLSearchParams(location.hash.replace(/^#/,''));
+    if (hash.has('invite')) {
+      const invite = hash.get('invite');
+      if (canonicalKey(invite)) {$('#auth-invite').value=invite;$('#auth-purpose').value='join';}
+      else memberMessage('邀请链接格式无效，请向邀请人索取新链接。');
+      history.replaceState(null,'',location.pathname+location.search);
+    }
+    function purposeChanged(){const joining=$('#auth-purpose').value==='join';$('#invite-label').hidden=!joining;$('#auth-invite').required=joining;}
+    $('#auth-purpose').addEventListener('change',purposeChanged); purposeChanged();
+    $('#request-code-form').addEventListener('submit',function(event){event.preventDefault();memberAction(async function(){
+      if (!state.capabilities?.enabled || !state.capabilities?.auth_ready) throw new Error('邮箱验证码尚未配置，目前无法发送。');
+      if (!$('#request-code-form').reportValidity()) return;
+      const purpose=$('#auth-purpose').value,email=$('#auth-email').value.trim();
+      const invite=$('#auth-invite').value.trim();
+      if(purpose==='join'&&!canonicalKey(invite))throw new Error('请输入有效的一次性邀请码。');
+      const result=await v2Request('auth/request-code',{method:'POST',body:{email,purpose,...(purpose==='join'?{invite_code:invite}:{})}});
+      if(result?.ok!==true||!canonicalKey(result.challenge_id))throw new Error('服务没有确认验证码请求，请稍后重试。');
+      state.challenge=result.challenge_id;$('#verify-code-form').hidden=false;$('#auth-code').focus();
+      memberMessage('验证码请求已受理，请查看邮箱；未收到时请稍后重试。');
+    });});
+    $('#verify-code-form').addEventListener('submit',function(event){event.preventDefault();memberAction(async function(){
+      if(!state.challenge||!$('#verify-code-form').reportValidity()||!$('#public-consent').checked)throw new Error('请输入六位验证码，并勾选公开资料同意项。');
+      const result=await v2Request('auth/verify-code',{method:'POST',body:{challenge_id:state.challenge,code:$('#auth-code').value.trim(),consent:true}});
+      const saved=sessionRecord({session_token:result?.session_token,expires_at:result?.expires_at});
+      if(result?.ok!==true||!saved)throw new Error('服务没有返回有效登录状态。');
+      state.session=saved;
+      try{renderMember(result.member);}catch(error){clearSession();throw error;}
+      try{sessionStorage.setItem(SESSION_KEY,JSON.stringify(saved));}catch{}
+      state.challenge=null;$('#auth-code').value='';$('#auth-invite').value='';memberMessage('邮箱已验证，个人中心已接入。');
+    });});
+    $('#member-logout').addEventListener('click',function(){memberAction(async function(){
+      let confirmed=false;try{const result=await v2Request('auth/logout',{method:'POST',body:{},authorized:true});confirmed=result?.ok===true;}catch{}finally{clearSession();}
+      memberMessage(confirmed?'已退出本次登录。':'已清除本页登录状态，服务端退出尚未确认。');
+    });});
+    $('#profile-form').addEventListener('submit',function(event){event.preventDefault();memberAction(async function(){
+      if(!state.member||!$('#profile-form').reportValidity())return;
+      const result=await v2Request('me',{method:'PUT',body:{profile_version:state.member.profile_version,profile:readProfile()},authorized:true});
+      renderMember(result);memberMessage('公开资料已保存；刷新榜单可读取最新资料。');
+    });});
+    for(const input of document.querySelectorAll('[data-media-slot]'))input.addEventListener('change',function(){memberAction(async function(){
+      const slot=input.dataset.mediaSlot;
+      if(!state.capabilities?.media_ready)throw new Error('图片服务尚未配置。');
+      if(!input.files?.[0])return;
+      memberMessage('正在处理并上传图片…');
+      const jpeg_base64=await jpegForUpload(input.files[0],slot);
+      const result=await v2Request('me/media',{method:'POST',body:{slot,jpeg_base64},authorized:true});
+      if(result?.ok!==true)throw new Error('图片上传未确认。');
+      mediaReference(result.ref,slot);$('#profile-'+slot+'-ref').value=result.ref;setMediaImage($('#profile-'+slot+'-preview'),result.ref);
+      input.value='';memberMessage('图片已上传，请点「保存公开资料」使资料引用生效。');
+    });});
+    $('#device-create').addEventListener('click',function(){generateDevice('create');});
+    $('#device-rotate').addEventListener('click',function(){generateDevice('rotate');});
+    $('#device-revoke').addEventListener('click',function(){memberAction(async function(){
+      const result=await v2Request('me/device/revoke',{method:'POST',body:{},authorized:true});
+      if(result?.ok!==true)throw new Error('停用操作未确认。');
+      for(const cleanup of transientDownloads)cleanup();transientDownloads.clear();$('#device-download').replaceChildren();
+      state.member.device_bound=false;memberMessage('上报配置已停用，原配置不能继续上报。');
+    });});
+    $('#invite-create').addEventListener('click',function(){memberAction(async function(){
+      if(!state.member?.is_admin)throw new Error('当前账号没有生成邀请的权限。');
+      const result=await v2Request('admin/invites',{method:'POST',body:{expires_in_hours:72},authorized:true});
+      if(result?.ok!==true||!canonicalKey(result.invite_code)||!isoDateTime(result.expires_at))throw new Error('邀请生成未确认。');
+      const url=new URL(location.href);url.hash='invite='+encodeURIComponent(result.invite_code);
+      $('#invite-link').value=url.href;text('#invite-expiry','有效期至 '+(safeTimestamp(result.expires_at)||result.expires_at)+'（北京时间），仅可使用一次。');
+      $('#invite-result').hidden=false;memberMessage('邀请已生成，请主动复制后发给对方。');
+    });});
+    $('#invite-copy').addEventListener('click',async function(){
+      try{if(!navigator.clipboard?.writeText)throw new Error();await navigator.clipboard.writeText($('#invite-link').value);memberMessage('邀请链接已复制。');}
+      catch{$('#invite-link').focus();$('#invite-link').select();memberMessage('邀请链接已选中，请手动复制。');}
+    });
+    window.addEventListener('pagehide',function(){for(const cleanup of transientDownloads)cleanup();transientDownloads.clear();});
+    loadCapabilities();restoreMemberSession();
+  }
+
   function clearForLoading() {
-    state.data = null; state.day = null;
+    state.data = null; state.day = null; state.detail=null; state.detailRequest++;
     $('#day-rows').replaceChildren(); $('#empty-state').hidden = true;
     text('#day-timing', '正在读取所选日期所在周的已保存汇总…');
     text('#board-note', '切换日期只读取已保存的数据，不会重新采集日志。');
     for (const id of ['#total-tokens', '#without-cache', '#cost-estimate', '#detail-input', '#detail-output', '#detail-write', '#detail-read', '#model-count']) text(id, '—');
     text('#total-unit', 'tokens');
     text('#usage-period', '正在读取 ' + weekStartForDate(state.selectedDate) + ' 所在周…');
-    text('#update-status', '正在读取已保存汇总…');
+    text('#update-status', '正在读取已保存汇总…');text('#cost-detail','当前范围读取完成后显示参考估算；不沿用其他日期的价格。');
     $('#daily-chart').replaceChildren(); $('#model-list').replaceChildren(); $('#diagnostics-note').hidden = true;
     text('#chart-caption', '数据读取后显示所在周走势。');
   }
   async function loadDate(date, force = false) {
     if (state.pending) return;
-    const today = beijingDate();
-    if (!isDate(date) || date > today) {
-      $('#selected-date').value = state.selectedDate;
-      text('#error-message', '请选择今天或之前的北京时间日期。'); $('#error-banner').hidden = false; return;
-    }
-    state.selectedDate = date; updateDateControls();
-    const week = weekStartForDate(date);
-    if (!force && state.data?.week?.start === week) {
-      renderSavedData(); $('#error-banner').hidden = true; return;
-    }
-    clearForLoading(); setPending(true);
-    const controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 15000);
-    try {
-      const url = new URL('api/leaderboard', apiBase); url.searchParams.set('week', week);
-      const response = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit', signal: controller.signal });
-      let data;
-      try { data = await response.json(); } catch { throw new Error('服务返回的周榜格式不正确，请稍后重新读取。'); }
-      if (!response.ok) throw new Error(typeof data?.error === 'string' ? data.error : '暂时无法读取已保存数据。');
-      dayBoardFromWeekly(data, date);
-      state.data = data; renderSavedData(); $('#error-banner').hidden = true;
-    } catch (error) {
-      state.data = null; state.day = null;
-      const message = error?.name === 'AbortError' ? '读取超时，请检查网络后重试。' :
-        error instanceof Error && !/^(?:Failed to fetch|Load failed|NetworkError)/i.test(error.message) ? error.message : mode.retry;
-      text('#error-message', message); $('#error-banner').hidden = false;
-      text('#day-timing', '这次读取未完成，不能判断所选日期是否有记录。');
-      text('#update-status', mode.retry);
-      text('#empty-title', '暂时无法读取这一天'); text('#empty-description', '请重新读取；连接失败不会显示成零用量。');
-      $('#empty-state').hidden = false;
-    } finally { clearTimeout(timer); setPending(false); }
+    const today=beijingDate();
+    if(!isDate(date)||date>today){$('#selected-date').value=state.selectedDate;text('#error-message','请选择今天或之前的北京时间日期。');$('#error-banner').hidden=false;return;}
+    if(date!==state.selectedDate)state.scopeUser='all';
+    state.selectedDate=date;updateDateControls();
+    const week=weekStartForDate(date);
+    if(!force&&state.apiVersion===1&&state.data?.week?.start===week){renderSavedData();$('#error-banner').hidden=true;return;}
+    clearForLoading();setPending(true);
+    try{
+      let board;
+      try{board=normalizeV2Board(await v2Request('leaderboard?'+new URLSearchParams({date})),date);}
+      catch(error){if(!mayUseV1('GET',error?.status))throw error;}
+      if(board){
+        state.apiVersion=2;state.v2Board=board;renderV2Board(board);$('#error-banner').hidden=true;
+        text('#preview-command','node scripts/report-community.mjs --preview');text('#submit-command','node scripts/report-community.mjs --submit');
+        text('#command-note','每人使用自己的 public-client-v2.json；先预览、确认后手动上报，不要复制他人的密钥。');
+        await loadV2Detail(date,state.scopeUser);
+      }else{
+        const controller=new AbortController(),timer=setTimeout(function(){controller.abort();},15000);
+        try{
+          const url=new URL('api/leaderboard',apiBase);url.searchParams.set('week',week);
+          const response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store',credentials:'omit',redirect:'error',signal:controller.signal});
+          let data;try{data=await response.json();}catch{throw new Error('服务返回的周榜格式不正确，请稍后重新读取。');}
+          if(!response.ok)throw new Error(typeof data?.error==='string'?data.error:'暂时无法读取已保存数据。');
+          dayBoardFromWeekly(data,date);state.apiVersion=1;state.data=data;state.scopeUser='all';renderSavedData();$('#error-banner').hidden=true;
+          text('#preview-command','node scripts/'+mode.script+' --preview');text('#submit-command','node scripts/'+mode.script+' --submit');
+        }finally{clearTimeout(timer);}
+      }
+    }catch(error){
+      state.data=null;state.day=null;state.detail=null;
+      text('#error-message',error?.name==='AbortError'?'读取超时，请稍后重试。':error instanceof Error?error.message:mode.retry);$('#error-banner').hidden=false;
+      text('#day-timing','这次读取未完成，不能判断所选日期是否有记录。');text('#update-status',mode.retry);
+      text('#empty-title','暂时无法读取这一天');text('#empty-description','请重新读取；连接失败不会显示成零用量。');$('#empty-state').hidden=false;
+    }finally{setPending(false);}
   }
 
   for (const tab of document.querySelectorAll('[data-tab]')) {
@@ -397,6 +823,8 @@ function initialize() {
       text('#copy-feedback', '命令已选中。电脑可按 Ctrl+C（Mac 按 ⌘C），手机可长按复制。');
     }
   });
+  $('#usage-all-scope').addEventListener('click',function(){loadV2Detail(state.selectedDate,'all');});
+  connectMemberForms();
   document.title = '有酸奶 Yak Yogurt · 日用量榜';
   text('#mode-label', mode.label);
   text('#scope-note', mode.scope);
