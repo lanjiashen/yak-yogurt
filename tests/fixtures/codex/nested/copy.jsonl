@@ -1,2 +1,0 @@
-{"type":"session_meta","payload":{"id":"fake-session-main"}}
-{"timestamp":"2026-10-16T16:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":160,"cached_input_tokens":50,"cache_write_input_tokens":5,"output_tokens":25,"reasoning_output_tokens":2,"total_tokens":185},"last_token_usage":{"input_tokens":60,"cached_input_tokens":30,"cache_write_input_tokens":5,"output_tokens":15,"reasoning_output_tokens":2,"total_tokens":75}}}}
